@@ -62,7 +62,7 @@ void DigitalKnob::handle() {
         pin = true;
     }*/
 
-    int16_t correction = ((pin ^ m_invert ? 0xff : 0) - m_rawValue) * 100;
+    int16_t correction = ((pin^m_invert ? 0xff : 0) - m_rawValue) * 100;
     m_rawValue = m_rawValue + correction / m_alpha;
     m_rawValue = std::max((int16_t)0, std::min(m_rawValue, (int16_t)0xff));
 

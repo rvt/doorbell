@@ -50,7 +50,7 @@ volatile bool controllerConfigModified = false;
 volatile uint16_t lastMeasurementCRC = 0;
 
 // Indicate that a service requested an restart. Set to millies() of current time and it will restart 5000ms later
-volatile uint32_t shouldRestart = 0;
+volatile uint32_t shouldRestart = 0;        
 
 // MQTT Status stuff
 volatile bool hasMqttConfigured = false;
@@ -336,7 +336,7 @@ void setupWIFIReconnectManager() {
         return 1;
     });
     WAITFORCOMMANDCAPTURE = new StateTimed(3000, []() {
-        publishStatusToMqtt();
+            publishStatusToMqtt();
         return 2;
     });
     bootSequence.reset(new StateMachine({
@@ -422,9 +422,9 @@ void setupDefaults() {
 }
 
 void setup() {
-    pinMode(RINGER_PIN, OUTPUT);
+    pinMode(RINGER_PIN,OUTPUT);
     digitalWrite(RINGER_PIN, INVERT_OUTPUT);
-    pinMode(LED_PIN, OUTPUT);
+    pinMode(LED_PIN,OUTPUT);
     digitalWrite(LED_PIN, 0);
 
     // Enable serial port
@@ -459,13 +459,12 @@ void loop() {
         // Record time when we started the bell
         if (digitalKnob.isEdgeUp()) {
             bellStartTime = currentMillis;
-        }
+        } 
 
         // Always show the digital led
         digitalWrite(LED_PIN, digitalKnob.current() ^ INVERT_OUTPUT ^ INVERT_INPUT);
-
         // Ringer the bell when we have it enabled and when it´s within the allowed timeframe
-        if (controllerConfig.get("ringerOn") &&
+        if (controllerConfig.get("ringerOn") && 
             (currentMillis - bellStartTime < (int16_t)controllerConfig.get("maxRingTime"))) {
             digitalWrite(RINGER_PIN, digitalKnob.current() ^ INVERT_OUTPUT);
         } else {
@@ -492,7 +491,7 @@ void loop() {
                 saveConfigSPIFFS(CONFIG_FILENAME, controllerConfig);
             }
         } else if (counter50TimesSec % NUMBER_OF_SLOTS == slot50++) {
-            wm.process();
+             wm.process();
         } else if (shouldRestart != 0 && (currentMillis - shouldRestart >= 5000)) {
             shouldRestart = 0;
             ESP.restart();
