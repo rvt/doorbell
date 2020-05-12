@@ -1,3 +1,5 @@
+[![Build Status](https://api.travis-ci.org/rvt/doorbell.svg?branch=master)](https://www.travis-ci.org/rvt/doorbell)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 # Doorbell
 
 It´s code for a remote doorbell. Nothing fancy.. It just allows me to send a push notification to Telegram and Home app.
