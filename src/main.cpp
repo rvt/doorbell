@@ -10,7 +10,7 @@
 #include <ESP8266WiFi.h>  // https://github.com/esp8266/Arduino
 #include <ESP8266mDNS.h>
 #include <WiFiManager.h> // https://github.com/tzapu/WiFiManager
-#include <FS.h>   // Include the SPIFFS library
+#include "LittleFS.h"
 
 #include <propertyutils.h>
 #include <optparser.h>
@@ -54,8 +54,6 @@ volatile uint32_t shouldRestart = 0;
 
 // MQTT Status stuff
 volatile bool hasMqttConfigured = false;
-char* mqttLastWillTopic;
-char* mqttClientID;
 char* mqttSubscriberTopic;
 uint8_t mqttSubscriberTopicStrLength;
 WiFiClient wifiClient;
@@ -83,19 +81,19 @@ WiFiManagerParameter wm_mqtt_password("input", "mqtt password", "", MQTT_PASSWOR
 
 
 ///////////////////////////////////////////////////////////////////////////
-//  Spiffs
+//  LittleFS
 ///////////////////////////////////////////////////////////////////////////
 
 
-bool loadConfigSpiffs(const char* filename, Properties& properties) {
+bool loadConfig(const char* filename, Properties& properties) {
     bool ret = false;
 
-    if (SPIFFS.begin()) {
+    if (LittleFS.begin()) {
         Serial.println("mounted file system");
 
-        if (SPIFFS.exists(filename)) {
+        if (LittleFS.exists(filename)) {
             //file exists, reading and loading
-            File configFile = SPIFFS.open(filename, "r");
+            File configFile = LittleFS.open(filename, "r");
 
             if (configFile) {
                 Serial.print(F("Loading config : "));
@@ -110,9 +108,9 @@ bool loadConfigSpiffs(const char* filename, Properties& properties) {
             Serial.println(filename);
         }
 
-        // SPIFFS.end();
+        // LittleFS.end();
     } else {
-        Serial.print(F("Failed to begin SPIFFS"));
+        Serial.print(F("Failed to begin LittleFS"));
     }
 
     return ret;
@@ -120,14 +118,14 @@ bool loadConfigSpiffs(const char* filename, Properties& properties) {
 
 
 /**
- * Store custom oarameter configuration in SPIFFS
+ * Store custom oarameter configuration in LittleFS
  */
-bool saveConfigSPIFFS(const char* filename, Properties& properties) {
+bool saveConfig(const char* filename, Properties& properties) {
     bool ret = false;
 
-    if (SPIFFS.begin()) {
-        SPIFFS.remove(filename);
-        File configFile = SPIFFS.open(filename, "w");
+    if (LittleFS.begin()) {
+        LittleFS.remove(filename);
+        File configFile = LittleFS.open(filename, "w");
 
         if (configFile) {
             Serial.print(F("Saving config : "));
@@ -141,7 +139,7 @@ bool saveConfigSPIFFS(const char* filename, Properties& properties) {
         }
 
         configFile.close();
-        //    SPIFFS.end();
+        //    LittleFS.end();
     }
 
     return ret;
@@ -156,7 +154,7 @@ bool saveConfigSPIFFS(const char* filename, Properties& properties) {
 * ri = When bool is pressed
 *
 */
-void publishToMQTT(const char* topic, const char* payload);
+void publishRelativeToBaseMQTT(const char* topic, const char* payload);
 void publishStatusToMqtt() {
 
     auto format = "en=%i ri=%i";
@@ -172,7 +170,7 @@ void publishStatusToMqtt() {
     uint16_t thisCrc = CRCEEProm::crc16((uint8_t*)buffer, std::strlen(buffer));
 
     if (thisCrc != lastMeasurementCRC) {
-        publishToMQTT("status", buffer);
+        publishRelativeToBaseMQTT("status", buffer);
     }
 
     lastMeasurementCRC = thisCrc;
@@ -182,14 +180,18 @@ void publishStatusToMqtt() {
  * Publish a message to mqtt
  */
 void publishToMQTT(const char* topic, const char* payload) {
-    char buffer[65];
-    const char* mqttBaseTopic = controllerConfig.get("mqttBaseTopic");
-    snprintf(buffer, sizeof(buffer), "%s/%s", mqttBaseTopic, topic);
-
-    if (mqttClient.publish(buffer, payload, true)) {
-    } else {
+    if (!mqttClient.publish(topic, payload, true)) {
         Serial.println(F("Failed to publish"));
     }
+}
+
+void publishRelativeToBaseMQTT(const char* topic, const char* payload) {
+    char buffer[65];
+    const char* mqttBaseTopic = controllerConfig.get("mqttBaseTopic");
+    strncpy(buffer, mqttBaseTopic, sizeof(buffer));
+    strncat(buffer, "/", sizeof(buffer));
+    strncat(buffer, topic, sizeof(buffer));
+    publishToMQTT(buffer, payload);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////
@@ -203,7 +205,7 @@ void handleCmd(const char* topic, const char* p_payload) {
     //Serial.println(topicPos);
 
     // Look for a temperature setPoint topic
-    if (std::strstr(topicPos, "config") != nullptr) {
+    if (std::strstr(topicPos, "/config") != nullptr) {
         bool on;
         OptParser::get(p_payload, [&on](OptValue values) {
 
@@ -245,11 +247,7 @@ void setupMQTT() {
         handleCmd(p_topic, mqttReceiveBuffer);
     });
 
-    const char* mqttBaseTopic = controllerConfig.get("mqttBaseTopic");
-    mqttClientID = makeCString("%08X", ESP.getChipId());
-    mqttLastWillTopic = makeCString("%s/%s", mqttBaseTopic, MQTT_LASTWILL_TOPIC);
-    mqttSubscriberTopic = makeCString("%s/+", mqttBaseTopic);
-    mqttSubscriberTopicStrLength = std::strlen(mqttSubscriberTopic) - 1;
+    mqttSubscriberTopicStrLength = std::strlen(mqttSubscriberTopic);
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -296,7 +294,13 @@ void setupWIFIReconnectManager() {
             return 1;
         }
 
-        WiFi.mode(WIFI_STA); // HACK for some reason AP stayed active, even though it should not
+        // For some reason the access point active, so we disable it explicitly
+        // FOR ESP32 we will keep on this state untill WIFI is connected
+        if (WiFi.status() == WL_CONNECTED) {
+            WiFi.mode(WIFI_STA);
+        } else {
+            return 2;
+        }
         return 3;
     });
     CONNECTMQTT = new State([]() {
@@ -306,10 +310,10 @@ void setupWIFIReconnectManager() {
         );
 
         if (mqttClient.connect(
-                mqttClientID,
+                controllerConfig.get("mqttClientID"),
                 controllerConfig.get("mqttUsername"),
                 controllerConfig.get("mqttPassword"),
-                mqttLastWillTopic,
+                controllerConfig.get("mqttLastWillTopic"),
                 0,
                 1,
                 MQTT_LASTWILL_OFFLINE)
@@ -322,7 +326,7 @@ void setupWIFIReconnectManager() {
     });
     PUBLISHONLINE = new State([]() {
         publishToMQTT(
-            MQTT_LASTWILL_TOPIC,
+            controllerConfig.get("mqttLastWillTopic"),
             MQTT_LASTWILL_ONLINE);
         return 5;
     });
@@ -404,7 +408,12 @@ void setupWifiManager() {
     wm.setMenu(menu);
 
     wm.startWebPortal();
-    wm.autoConnect(controllerConfig.get("mqttBaseTopic"));
+    wm.autoConnect(controllerConfig.get("mqttClientID"));
+    #if defined(ESP8266)
+    WiFi.setSleepMode(WIFI_NONE_SLEEP);
+    MDNS.begin(controllerConfig.get("mqttClientID"));
+    MDNS.addService(0, "http", "tcp", 80);
+    #endif;
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -412,6 +421,21 @@ void setupWifiManager() {
 ///////////////////////////////////////////////////////////////////////////
 
 void setupDefaults() {
+    char chipHexBuffer[9];
+    snprintf(chipHexBuffer, sizeof(chipHexBuffer), "%08X", ESP.getChipId());
+
+    char mqttClientID[16];
+    snprintf(mqttClientID, sizeof(mqttClientID), "DOORBELL%s", chipHexBuffer);
+
+    char mqttBaseTopic[16]="DOORBELL";
+
+    char mqttLastWillTopic[64];
+    snprintf(mqttLastWillTopic, sizeof(mqttLastWillTopic), "%s/%s", mqttBaseTopic, MQTT_LASTWILL_TOPIC);
+    
+    controllerConfigModified |= controllerConfig.putNotContains("mqttClientID", PV(mqttClientID));
+    controllerConfigModified |= controllerConfig.putNotContains("mqttBaseTopic", PV(mqttBaseTopic));
+    controllerConfigModified |= controllerConfig.putNotContains("mqttLastWillTopic", PV(mqttLastWillTopic));
+
     controllerConfigModified |= controllerConfig.putNotContains("mqttServer", PV(""));
     controllerConfigModified |= controllerConfig.putNotContains("mqttUsername", PV(""));
     controllerConfigModified |= controllerConfig.putNotContains("mqttPassword", PV(""));
@@ -431,7 +455,7 @@ void setup() {
     Serial.begin(115200);
     delay(050);
     // load configurations
-    loadConfigSpiffs(CONFIG_FILENAME, controllerConfig);
+    loadConfigLittleFS(CONFIG_FILENAME, controllerConfig);
     setupDefaults();
 
     setupMQTT();
@@ -462,10 +486,10 @@ void loop() {
         } 
 
         // Always show the digital led
-        digitalWrite(LED_PIN, digitalKnob.current() ^ INVERT_OUTPUT ^ INVERT_INPUT);
+        digitalWrite(LED_PIN, digitalKnob.current());
         // Ringer the bell when we have it enabled and when it´s within the allowed timeframe
         if (controllerConfig.get("ringerOn") && 
-            (currentMillis - bellStartTime < (int16_t)controllerConfig.get("maxRingTime"))) {
+            (currentMillis - bellStartTime < (uint32_t)controllerConfig.get("maxRingTime").asLong())) {
             digitalWrite(RINGER_PIN, digitalKnob.current() ^ INVERT_OUTPUT);
         } else {
             digitalWrite(RINGER_PIN, INVERT_OUTPUT);
@@ -488,7 +512,7 @@ void loop() {
             if (controllerConfigModified) {
                 controllerConfigModified = false;
                 publishStatusToMqtt();
-                saveConfigSPIFFS(CONFIG_FILENAME, controllerConfig);
+                saveConfig(CONFIG_FILENAME, controllerConfig);
             }
         } else if (counter50TimesSec % NUMBER_OF_SLOTS == slot50++) {
              wm.process();

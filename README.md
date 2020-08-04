@@ -1,4 +1,4 @@
-[![Build Status](https://api.travis-ci.org/rvt/doorbell.svg?branch=master)](https://www.travis-ci.org/rvt/doorbell)
+[![Build Status](https://www.travis-ci.org/rvt/doorbell.svg?branch=master)](https://www.travis-ci.org/rvt/doorbell)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 # Doorbell
 
