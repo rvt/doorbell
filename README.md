@@ -5,12 +5,12 @@
 It´s code for a remote doorbell. Nothing fancy.. It just allows me to send a push notification to Telegram and Home app.
 
 If you wish to use this code, feel free to do so.
-It was designed around a Wemos D1 with the following pins configured:
+It was designed around a Wemos D1:
 
 # Features
 
 * Allows to ring your current buzzer using a relay
-* Allows to turn of your buzzer
+* Allows to turn off/on your buzzer while we keep sending messages to telegram/homeapp
 * Allows you to send a request over MQTT
 * Uses a filter to prevent false positives
 

@@ -413,7 +413,7 @@ void setupWifiManager() {
     WiFi.setSleepMode(WIFI_NONE_SLEEP);
     MDNS.begin(controllerConfig.get("mqttClientID"));
     MDNS.addService(0, "http", "tcp", 80);
-    #endif;
+    #endif
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -455,7 +455,7 @@ void setup() {
     Serial.begin(115200);
     delay(050);
     // load configurations
-    loadConfigLittleFS(CONFIG_FILENAME, controllerConfig);
+    loadConfig(CONFIG_FILENAME, controllerConfig);
     setupDefaults();
 
     setupMQTT();
