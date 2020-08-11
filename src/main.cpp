@@ -50,7 +50,7 @@ volatile bool controllerConfigModified = false;
 volatile uint16_t lastMeasurementCRC = 0;
 
 // Indicate that a service requested an restart. Set to millies() of current time and it will restart 5000ms later
-volatile uint32_t shouldRestart = 0;        
+volatile uint32_t shouldRestart = 0;
 
 // MQTT Status stuff
 volatile bool hasMqttConfigured = false;
@@ -204,10 +204,13 @@ void handleCmd(const char* topic, const char* p_payload) {
     //Serial.print(F("Handle command : "));
     //Serial.println(topicPos);
 
+    char payloadBuffer[32];
+    strncpy(payloadBuffer, p_payload, sizeof(payloadBuffer));
+
     // Look for a temperature setPoint topic
     if (std::strstr(topicPos, "/config") != nullptr) {
         bool on;
-        OptParser::get(p_payload, [&on](OptValue values) {
+        OptParser::get(payloadBuffer, [&on](OptValue values) {
 
             if (std::strcmp(values.key(), "en") == 0) {
                 controllerConfig.put("ringerOn", PV((int)values != 0));
@@ -220,7 +223,7 @@ void handleCmd(const char* topic, const char* p_payload) {
     }
 
     if (strstr(topicPos, "reset") != nullptr) {
-        OptParser::get(p_payload, [](OptValue v) {
+        OptParser::get(payloadBuffer, [](OptValue v) {
             if (strcmp(v.key(), "1") == 0) {
                 shouldRestart = millis();
             }
@@ -301,6 +304,7 @@ void setupWIFIReconnectManager() {
         } else {
             return 2;
         }
+
         return 3;
     });
     CONNECTMQTT = new State([]() {
@@ -340,7 +344,7 @@ void setupWIFIReconnectManager() {
         return 1;
     });
     WAITFORCOMMANDCAPTURE = new StateTimed(3000, []() {
-            publishStatusToMqtt();
+        publishStatusToMqtt();
         return 2;
     });
     bootSequence.reset(new StateMachine({
@@ -409,11 +413,11 @@ void setupWifiManager() {
 
     wm.startWebPortal();
     wm.autoConnect(controllerConfig.get("mqttClientID"));
-    #if defined(ESP8266)
+#if defined(ESP8266)
     WiFi.setSleepMode(WIFI_NONE_SLEEP);
     MDNS.begin(controllerConfig.get("mqttClientID"));
     MDNS.addService(0, "http", "tcp", 80);
-    #endif
+#endif
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -427,11 +431,11 @@ void setupDefaults() {
     char mqttClientID[16];
     snprintf(mqttClientID, sizeof(mqttClientID), "DOORBELL%s", chipHexBuffer);
 
-    char mqttBaseTopic[16]="DOORBELL";
+    char mqttBaseTopic[16] = "DOORBELL";
 
     char mqttLastWillTopic[64];
     snprintf(mqttLastWillTopic, sizeof(mqttLastWillTopic), "%s/%s", mqttBaseTopic, MQTT_LASTWILL_TOPIC);
-    
+
     controllerConfigModified |= controllerConfig.putNotContains("mqttClientID", PV(mqttClientID));
     controllerConfigModified |= controllerConfig.putNotContains("mqttBaseTopic", PV(mqttBaseTopic));
     controllerConfigModified |= controllerConfig.putNotContains("mqttLastWillTopic", PV(mqttLastWillTopic));
@@ -446,9 +450,9 @@ void setupDefaults() {
 }
 
 void setup() {
-    pinMode(RINGER_PIN,OUTPUT);
+    pinMode(RINGER_PIN, OUTPUT);
     digitalWrite(RINGER_PIN, INVERT_OUTPUT);
-    pinMode(LED_PIN,OUTPUT);
+    pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, 0);
 
     // Enable serial port
@@ -483,12 +487,13 @@ void loop() {
         // Record time when we started the bell
         if (digitalKnob.isEdgeUp()) {
             bellStartTime = currentMillis;
-        } 
+        }
 
         // Always show the digital led
         digitalWrite(LED_PIN, digitalKnob.current());
+
         // Ringer the bell when we have it enabled and when it´s within the allowed timeframe
-        if (controllerConfig.get("ringerOn") && 
+        if (controllerConfig.get("ringerOn") &&
             (currentMillis - bellStartTime < (uint32_t)controllerConfig.get("maxRingTime").asLong())) {
             digitalWrite(RINGER_PIN, digitalKnob.current() ^ INVERT_OUTPUT);
         } else {
@@ -515,7 +520,7 @@ void loop() {
                 saveConfig(CONFIG_FILENAME, controllerConfig);
             }
         } else if (counter50TimesSec % NUMBER_OF_SLOTS == slot50++) {
-             wm.process();
+            wm.process();
         } else if (shouldRestart != 0 && (currentMillis - shouldRestart >= 5000)) {
             shouldRestart = 0;
             ESP.restart();
