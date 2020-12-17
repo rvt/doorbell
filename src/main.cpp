@@ -13,7 +13,7 @@
 #include "LittleFS.h"
 
 #include <propertyutils.h>
-#include <optparser.h>
+#include <optparser.hpp>
 #include <utils.h>
 
 #include <PubSubClient.h> // https://github.com/knolleary/pubsubclient/releases/tag/v2.6
@@ -55,7 +55,6 @@ volatile uint32_t shouldRestart = 0;
 // MQTT Status stuff
 volatile bool hasMqttConfigured = false;
 char* mqttSubscriberTopic;
-uint8_t mqttSubscriberTopicStrLength;
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 
@@ -200,14 +199,15 @@ void publishRelativeToBaseMQTT(const char* topic, const char* payload) {
  * Handle incomming MQTT requests
  */
 void handleCmd(const char* topic, const char* p_payload) {
+    const char* mqttClientID = controllerConfig.get("mqttClientID");
+    uint8_t mqttSubscriberTopicStrLength = std::strlen(mqttClientID);
+
     auto topicPos = topic + mqttSubscriberTopicStrLength;
-    //Serial.print(F("Handle command : "));
-    //Serial.println(topicPos);
+    // Serial.print(F("Handle command : "));
+    // Serial.println(topicPos);
 
-    char payloadBuffer[32];
+    char payloadBuffer[16];
     strncpy(payloadBuffer, p_payload, sizeof(payloadBuffer));
-
-    // Look for a temperature setPoint topic
     if (std::strstr(topicPos, "/config") != nullptr) {
         bool on;
         OptParser::get(payloadBuffer, [&on](OptValue values) {
@@ -222,7 +222,7 @@ void handleCmd(const char* topic, const char* p_payload) {
         Serial.println("Config");
     }
 
-    if (strstr(topicPos, "reset") != nullptr) {
+    if (strstr(topicPos, "/reset") != nullptr) {
         OptParser::get(payloadBuffer, [](OptValue v) {
             if (strcmp(v.key(), "1") == 0) {
                 shouldRestart = millis();
@@ -249,8 +249,6 @@ void setupMQTT() {
         mqttReceiveBuffer[p_length] = 0;
         handleCmd(p_topic, mqttReceiveBuffer);
     });
-
-    mqttSubscriberTopicStrLength = std::strlen(mqttSubscriberTopic);
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -265,36 +263,40 @@ void serverOnlineCallback() {
  * Setup statemachine that will handle reconnection to mqtt after WIFI drops
  */
 void setupWIFIReconnectManager() {
-    // Statemachine to handle (re)connection to MQTT
-    State* BOOTSEQUENCESTART;
-    State* DELAYEDMQTTCONNECTION;
-    State* TESTMQTTCONNECTION;
-    State* CONNECTMQTT;
-    State* PUBLISHONLINE;
-    State* SUBSCRIBECOMMANDTOPIC;
-    State* WAITFORCOMMANDCAPTURE;
+    static char mqttLastWillTopic[64];
+    const char* mqttClientID = controllerConfig.get("mqttClientID");
+    snprintf(mqttLastWillTopic, sizeof(mqttLastWillTopic), "%s/%s", mqttClientID, MQTT_LASTWILL_TOPIC);
 
-    BOOTSEQUENCESTART = new State([]() {
-        return 2;
+    // Statemachine to handle (re)connection to MQTT
+    State* BOOTSEQUENCESTART = new State;
+    State* DELAYEDMQTTCONNECTION = new StateTimed {1500};
+    State* TESTMQTTCONNECTION = new State;
+    State* CONNECTMQTT = new State;
+    State* PUBLISHONLINE = new State;
+    State* SUBSCRIBECOMMANDTOPIC = new State;
+    State* WAITFORCOMMANDCAPTURE = new StateTimed { 3000 };
+
+    BOOTSEQUENCESTART->setRunnable([TESTMQTTCONNECTION]() {
+        return TESTMQTTCONNECTION;
     });
-    DELAYEDMQTTCONNECTION = new StateTimed(1500, []() {
+    DELAYEDMQTTCONNECTION->setRunnable([DELAYEDMQTTCONNECTION, TESTMQTTCONNECTION]() {
         hasMqttConfigured =
             controllerConfig.contains("mqttServer") &&
             std::strlen((const char*)controllerConfig.get("mqttServer")) > 0;
 
         if (!hasMqttConfigured) {
-            return 1;
+            return DELAYEDMQTTCONNECTION;
         }
 
-        return 2;
+        return TESTMQTTCONNECTION;
     });
-    TESTMQTTCONNECTION = new State([]() {
+    TESTMQTTCONNECTION->setRunnable([DELAYEDMQTTCONNECTION, TESTMQTTCONNECTION, CONNECTMQTT]() {
         if (mqttClient.connected())  {
             if (WiFi.status() != WL_CONNECTED) {
                 mqttClient.disconnect();
             }
 
-            return 1;
+            return DELAYEDMQTTCONNECTION;
         }
 
         // For some reason the access point active, so we disable it explicitly
@@ -302,12 +304,12 @@ void setupWIFIReconnectManager() {
         if (WiFi.status() == WL_CONNECTED) {
             WiFi.mode(WIFI_STA);
         } else {
-            return 2;
+            return TESTMQTTCONNECTION;
         }
 
-        return 3;
+        return CONNECTMQTT;
     });
-    CONNECTMQTT = new State([]() {
+    CONNECTMQTT->setRunnable([PUBLISHONLINE, DELAYEDMQTTCONNECTION]() {
         mqttClient.setServer(
             controllerConfig.get("mqttServer"),
             (int16_t)controllerConfig.get("mqttPort")
@@ -317,45 +319,38 @@ void setupWIFIReconnectManager() {
                 controllerConfig.get("mqttClientID"),
                 controllerConfig.get("mqttUsername"),
                 controllerConfig.get("mqttPassword"),
-                controllerConfig.get("mqttLastWillTopic"),
+                mqttLastWillTopic,
                 0,
                 1,
                 MQTT_LASTWILL_OFFLINE)
            ) {
-
-            return 4;
+            return PUBLISHONLINE;
         }
 
-        return 1;
+        return DELAYEDMQTTCONNECTION;
     });
-    PUBLISHONLINE = new State([]() {
+    PUBLISHONLINE->setRunnable([SUBSCRIBECOMMANDTOPIC]() {
         publishToMQTT(
-            controllerConfig.get("mqttLastWillTopic"),
+            mqttLastWillTopic,
             MQTT_LASTWILL_ONLINE);
-        return 5;
+        return SUBSCRIBECOMMANDTOPIC;
     });
-    SUBSCRIBECOMMANDTOPIC = new State([]() {
-        if (mqttClient.subscribe(mqttSubscriberTopic, 0)) {
+    SUBSCRIBECOMMANDTOPIC->setRunnable([WAITFORCOMMANDCAPTURE, DELAYEDMQTTCONNECTION]() {
+        char mqttSubscriberTopic[32];
+        const char* mqttClientID = controllerConfig.get("mqttClientID");
+        snprintf(mqttSubscriberTopic, sizeof(mqttSubscriberTopic), "%s/+", mqttClientID);
 
-            return 6;
+        if (mqttClient.subscribe(mqttSubscriberTopic, 0)) {
+            return WAITFORCOMMANDCAPTURE;
         }
 
         mqttClient.disconnect();
-        return 1;
+        return DELAYEDMQTTCONNECTION;
     });
-    WAITFORCOMMANDCAPTURE = new StateTimed(3000, []() {
-        publishStatusToMqtt();
-        return 2;
+    WAITFORCOMMANDCAPTURE->setRunnable([TESTMQTTCONNECTION]() {
+        return TESTMQTTCONNECTION;
     });
-    bootSequence.reset(new StateMachine({
-        BOOTSEQUENCESTART, // 0
-        DELAYEDMQTTCONNECTION,// 1
-        TESTMQTTCONNECTION, // 2
-        CONNECTMQTT, // 3
-        PUBLISHONLINE, // 4
-        SUBSCRIBECOMMANDTOPIC, // 5
-        WAITFORCOMMANDCAPTURE // 6
-    }));
+    bootSequence.reset(new StateMachine { BOOTSEQUENCESTART } );
     bootSequence->start();
 }
 
@@ -444,7 +439,7 @@ void setupDefaults() {
     controllerConfigModified |= controllerConfig.putNotContains("mqttUsername", PV(""));
     controllerConfigModified |= controllerConfig.putNotContains("mqttPassword", PV(""));
     controllerConfigModified |= controllerConfig.putNotContains("mqttPort", PV(1883));
-    controllerConfigModified |= controllerConfig.putNotContains("mqttBaseTopic", PV("DOORBELL"));
+    controllerConfigModified |= controllerConfig.putNotContains("mqttBaseTopic", PV(mqttBaseTopic));
     controllerConfigModified |= controllerConfig.putNotContains("ringerOn", PV(true));
     controllerConfigModified |= controllerConfig.putNotContains("maxRingTime", PV(5000));
 }
