@@ -5,7 +5,5 @@
 
 #include "catch2/catch.hpp"
 
-
-#include "src/test_utils.hpp"
 #include "src/test_properties.hpp"
 #include "src/test_digitalknob.hpp"
